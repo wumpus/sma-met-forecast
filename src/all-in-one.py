@@ -7,6 +7,7 @@ import sys
 import time
 import io
 import contextlib
+import tempfile
 
 import pygrib
 
@@ -421,7 +422,13 @@ def summarize_am(am_output):
     KG_ON_M2 = 3.3427e21
     DU       = 2.6868e16
 
-    return tau, Tb, pwv / MM_PWV, lwp / KG_ON_M2, iwp / KG_ON_M2, o3 / DU
+    try:
+        return tau, Tb, pwv / MM_PWV, lwp / KG_ON_M2, iwp / KG_ON_M2, o3 / DU
+    except UnboundLocalError:
+        with tempfile.NamedTemporaryFile(mode='w', prefix='buggy-am-output', dir='.', delete=False) as tfile:
+            print('Did not see complete output from AM, saving AM output to', tfile.name)
+            tfile.write(am_output)
+        return 0., 0., 0., 0., 0., 0.
 
 
 def print_final_output(gfs_timestamp, tau, Tb, pwv, lwp, iwp, o3, f):
