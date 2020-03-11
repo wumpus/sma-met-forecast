@@ -313,7 +313,57 @@ def print_am_layers(alt, Pbase, z, T, o3_vmr, RH, cloud_lmr, cloud_imr):
             cti = m * cloud_imr_mid
             print("column iwp_abs_Rayleigh {0:.3e} kg*m^-2".format(cti))
         print("")
-    pass
+
+    if (z[i] == alt):
+        return
+
+    u = (alt - z[i-1]) / (z[i] - z[i-1])
+    logP_s = u * math.log(Pbase[i]) + (1.0 - u) * math.log(Pbase[i-1]) 
+    P_s = math.exp(logP_s)
+    T_s = u * T[i] + (1.0 - u) * T[i-1]
+
+    #
+    # Other variables are interpolated or extrapolated linearly in P
+    # to the base level and clamped at zero.
+    #
+    u = (P_s - Pbase[i-1]) / (Pbase[i] - Pbase[i-1])
+    o3_vmr_s    =   u * o3_vmr[i]  + (1.0 - u) *    o3_vmr[i-1]
+    RH_s        =       u * RH[i]  + (1.0 - u) *        RH[i-1]
+    cloud_lmr_s = u * cloud_lmr[i] + (1.0 - u) * cloud_lmr[i-1]
+    cloud_imr_s = u * cloud_imr[i] + (1.0 - u) * cloud_imr[i-1]
+    if (o3_vmr_s < 0.0):
+        o3_vmr_s = 0.0
+    if (RH_s < 0.0):
+        RH_s = 0.0
+    if (cloud_lmr_s < 0.0):
+        cloud_lmr_s = 0.0
+    if (cloud_imr_s < 0.0):
+        cloud_imr_s = 0.0
+    o3_vmr_mid    = 0.5 * (   o3_vmr[i-1] +    o3_vmr_s)
+    RH_mid        = 0.5 * (       RH[i-1] +        RH_s)
+    cloud_lmr_mid = 0.5 * (cloud_lmr[i-1] + cloud_lmr_s)
+    cloud_imr_mid = 0.5 * (cloud_imr[i-1] + cloud_imr_s)
+    print("layer")
+    print("Pbase {0:.1f} mbar  # {1:.1f} m".format(P_s, alt))
+    print("Tbase {0:.1f} K".format(T_s))
+    print("column dry_air vmr")
+    if (o3_vmr_mid > 0.0):
+        print("column o3 vmr {0:.3e}".format(o3_vmr_mid))
+    if (RH_mid > 0.0):
+        if (T_mid > H2O_SUPERCOOL_LIMIT):
+            print("column h2o RH {0:.2f}%".format(RH_mid))
+        else:
+            print("column h2o RHi {0:.2f}%".format(RH_mid))
+    if (cloud_lmr_mid > 0.0):
+        dP = PASCAL_ON_MBAR * (Pbase[i] - Pbase[i-1])
+        m = dP / G_STD
+        ctw = m * cloud_lmr_mid
+        print("column lwp_abs_Rayleigh {0:.3e} kg*m^-2".format(ctw))
+    if (cloud_imr_mid > 0.0):
+        dP = PASCAL_ON_MBAR * (Pbase[i] - Pbase[i-1])
+        m = dP / G_STD
+        cti = m * cloud_imr_mid
+        print("column iwp_abs_Rayleigh {0:.3e} kg*m^-2".format(cti))
 
 
 def gfs15_to_am10(lat, lon, alt, gfs_cycle, forecast_hour):
@@ -350,8 +400,6 @@ def run_am(header_amc, layers_amc):
 
 
 def summarize_am(am_output):
-    print('GREG am output is')
-    print(am_output)
     lwp = 0.
     iwp = 0.
     for line in am_output.splitlines():
