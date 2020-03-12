@@ -185,7 +185,13 @@ STRAT_H2O_VMR = 5e-6
 def grib2_to_am_layers(grib_buffer, lat, lon, alt):
     with tempfile.NamedTemporaryFile(mode='wb', prefix='temp-', suffix='.grb') as f:
         f.write(grib_buffer)
-        grbindx = pygrib.index(f.name, "name", "level")
+        try:
+            grbindx = pygrib.index(f.name, "name", "level")
+        except Exception as e:
+            # stderr is being captured so we can't print to it
+            # example: RuntimeError: b'End of resource reached when reading message'
+            msg = 'pygrib raised {}, length of input was {}'.format(str(e), len(grib_buffer))
+            raise RuntimeError(msg)
 
     # in memory -- not sure what syntax actually works for this?
     # need to .index() after creation
@@ -370,6 +376,9 @@ def print_am_layers(alt, Pbase, z, T, o3_vmr, RH, cloud_lmr, cloud_imr):
 
 def gfs15_to_am10(lat, lon, alt, gfs_cycle, forecast_hour):
     grib_buffer = download_gfs(lat, lon, alt, gfs_cycle, forecast_hour)
+
+    if len(grib_buffer) < 20000:  # should be 28kb
+        print('suspiciously small grib file of length', len(grib_buffer), file=sys.stderr)
 
     my_stdout = io.StringIO()
     my_stderr = io.StringIO()
