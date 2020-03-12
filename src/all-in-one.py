@@ -8,6 +8,8 @@ import time
 import io
 import contextlib
 import tempfile
+from argparse import ArgumentParser
+import json
 
 import pygrib
 
@@ -24,7 +26,7 @@ appdir = '.'
 header_amc = appdir + '/header.amc'
 am_executable = '/usr/local/bin/am'
 
-GFS_TIMESTAMP  = '%Y%m%d_%H:00:00'
+GFS_TIMESTAMP = '%Y%m%d_%H:00:00'
 GFS_DAYHOUR = '%Y%m%d/%H'
 GFS_DAY = '%Y%m%d'
 GFS_HOUR = '%H'
@@ -422,13 +424,7 @@ def summarize_am(am_output):
     KG_ON_M2 = 3.3427e21
     DU       = 2.6868e16
 
-    try:
-        return tau, Tb, pwv / MM_PWV, lwp / KG_ON_M2, iwp / KG_ON_M2, o3 / DU
-    except UnboundLocalError:
-        with tempfile.NamedTemporaryFile(mode='w', prefix='buggy-am-output', dir='.', delete=False) as tfile:
-            print('Did not see complete output from AM, saving AM output to', tfile.name)
-            tfile.write(am_output)
-        return 0., 0., 0., 0., 0., 0.
+    return tau, Tb, pwv / MM_PWV, lwp / KG_ON_M2, iwp / KG_ON_M2, o3 / DU
 
 
 def print_final_output(gfs_timestamp, tau, Tb, pwv, lwp, iwp, o3, f):
@@ -442,16 +438,30 @@ def compute_one_hour(site, gfs_cycle, forecast_hour, f):
     print('fetching for hour', forecast_hour, file=sys.stderr)
     with record_latency('fetch gfs data'):
         success, layers_amc, layers_err = gfs15_to_am10(site['lat'], site['lon'], site['alt'], gfs_cycle, forecast_hour)
-    if success:
-        dt_forecast_hour = gfs_cycle + datetime.timedelta(hours=forecast_hour)
-        with record_latency('run am'):
-            am_output = run_am(header_amc, layers_amc)
+    if not success:
+        with tempfile.NamedTemporaryFile(mode='w', prefix='layers-err-', dir='.', delete=False) as tfile:
+            print('some problem turning the grib into layers, saving stderr to', tfile.name)
+            tfile.write(layers_err)
+            return  # no line emitted
+
+    dt_forecast_hour = gfs_cycle + datetime.timedelta(hours=forecast_hour)
+    with record_latency('run am'):
+        am_output = run_am(header_amc, layers_amc)
+
+    try:
         tau, Tb, pwv, lwp, iwp, o3 = summarize_am(am_output)
-        print_final_output(dt_forecast_hour.strftime(GFS_TIMESTAMP), tau, Tb, pwv, lwp, iwp, o3, f)
-    else:
-        print('logging errors to errors.log', file=sys.stderr)
-        with open('errors.log', 'a') as f:
-            print(layers_err, file=f)
+    except UnboundLocalError:
+        with tempfile.NamedTemporaryFile(mode='w', prefix='weird-am-output-', dir='.', delete=False) as tfile:
+            print('Did not see complete output from AM, saving AM output to', tfile.name)
+            # example: -(35) : The volume mixing ratio must be in the range 0 to 1.
+            # ! Error: parse error.
+            tfile.write('Input:\n\n')
+            tfile.write(header_amc)
+            tfile.write(layers_amc)
+            tfile.write('\nOutput:\n\n')
+            tfile.write(am_output)
+            return  # no line emitted
+    print_final_output(dt_forecast_hour.strftime(GFS_TIMESTAMP), tau, Tb, pwv, lwp, iwp, o3, f)
     dump_latency_histograms()
     time.sleep(1)
 
@@ -464,17 +474,68 @@ def make_forecast_table(site, gfs_cycle, f):
         compute_one_hour(site, gfs_cycle, forecast_hour, f)
 
 
-latest_gfs = latest_gfs_cycle_time()
+def read_stations(filename):
+    with open(filename, 'r') as f:
+        return json.load(f)
 
-for site in sites:
-    for hours_ago in range(0, 49, 6):
-        print('processing site', site['name'], 'hour', hours_ago, file=sys.stderr)
+        
+def main(args=None):
+    parser = ArgumentParser(description='gfs-tau-fetcher command line tool')
+    parser.add_argument('--vex', action='append', help='station(s) to fetch')
+    parser.add_argument('--stations', action='store', default='stations.json', help='station configuration file (default: stations.json)')
+    parser.add_argument('--backfill', action='store', default=0, type=int, help='hours to backfill')
+    parser.add_argument('--cycle', action='store', help='gfs cycle to fetch (e.g. 2020031200)')
+    args = parser.parse_args(args=args)
+
+    station_locations = read_stations(args.stations)
+    station_dict = dict([(v['vex'], v) for v in station_locations])
+
+    if not args.vex:
+        stations = station_dict.keys()
+    else:
+        stations = []
+        for vex in args.vex:
+            if ',' in vex:
+                vexes = vex.split(',')
+            else:
+                vexes = (vex,)
+            for v in vexes:
+                if v in station_dict:
+                    stations.append(v)
+                else:
+                    print('unknown vex', v, file=sys.stderr)
+
+    cycles = []
+    if args.cycle:
+        c = args.cycle
+        if len(c) not in (8, 10):
+            raise ValueError('unknown cycle time format, expecting YYYYMMDDHH: '+args.cycle)
+        if len(c) == 8:
+            c += '00'
+        gfs_starting_cycle = datetime.datetime.strptime(c, '%Y%m%d%H')
+    else:
+        gfs_starting_cycle = latest_gfs_cycle_time()
+
+    end_hours = 1
+    if args.backfill:
+        end_hours = args.backfill + 1
+    for hours_ago in range(0, end_hours, 6):
         dt_gfs_lag = datetime.timedelta(hours=-hours_ago)
-        gfs_cycle  = (latest_gfs + dt_gfs_lag)
-        outfile = '{}/{}/{}'.format(datadir, site['name'], gfs_cycle.strftime(GFS_TIMESTAMP))
-        print(outfile, file=sys.stderr)
-        if not ok(outfile):
-            print('did not find', hours_ago, 'so calling make_forecast_table', file=sys.stderr)
-            print(outfile, file=sys.stderr)
+        gfs_cycle = (gfs_starting_cycle + dt_gfs_lag)
+        cycles.append(gfs_cycle)
+
+    for vex in stations:
+        station = station_dict[vex]
+        for gfs_cycle in cycles:
+            print('processing station', vex, 'cycle', gfs_cycle.strftime(GFS_TIMESTAMP), file=sys.stderr)
+            outdir = '{}/{}'.format(datadir, vex)
+            outfile = '{}/{}'.format(outdir, gfs_cycle.strftime(GFS_TIMESTAMP))
+            if ok(outfile):
+                continue
+            os.makedirs(outdir, exist_ok=True)
             with open(outfile, 'w') as f:
-                make_forecast_table(site, gfs_cycle, f)
+                make_forecast_table(station, gfs_cycle, f)
+
+
+if __name__ == '__main__':
+    main()
