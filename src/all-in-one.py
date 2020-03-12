@@ -464,7 +464,8 @@ def compute_one_hour(site, gfs_cycle, forecast_hour, f):
             # example: -(35) : The volume mixing ratio must be in the range 0 to 1.
             # ! Error: parse error.
             tfile.write('Input:\n\n')
-            tfile.write(header_amc)
+            with open(header_amc, 'rb') as f:
+                tfile.write(f.read())
             tfile.write(layers_amc)
             tfile.write('\nOutput:\n\n')
             tfile.write(am_output)
@@ -539,6 +540,7 @@ def main(args=None):
             outdir = '{}/{}'.format(datadir, vex)
             outfile = '{}/{}'.format(outdir, gfs_cycle.strftime(GFS_TIMESTAMP))
             if ok(outfile):
+                print('outfile {} seems ok, not re-fetching'.format(outfile), file=sys.stder)
                 continue
             os.makedirs(outdir, exist_ok=True)
             with open(outfile, 'w') as f:
