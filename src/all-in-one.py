@@ -183,12 +183,11 @@ STRAT_H2O_VMR = 5e-6
 
 
 def grib2_to_am_layers(grib_buffer, lat, lon, alt):
-    # XXX change to a python temporary file
-    with open('temp.grb', 'wb') as f:
+    with tempfile.NamedTemporaryFile(mode='wb', prefix='temp-', suffix='.grb') as f:
         f.write(grib_buffer)
-    grbindx = pygrib.index("temp.grb", "name", "level")
+        grbindx = pygrib.index(f.name, "name", "level")
 
-    # not sure what syntax actually works for this
+    # in memory -- not sure what syntax actually works for this?
     # need to .index() after creation
     # grbindx = pygrib.fromstring(grib_buffer)
 
